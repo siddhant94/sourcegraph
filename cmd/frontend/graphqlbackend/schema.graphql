@@ -6032,6 +6032,11 @@ type CodeIntelligenceRange {
     references: LocationConnection!
 
     """
+    A list of implementations of the symbol occurring within the range.
+    """
+    implementations: LocationConnection!
+
+    """
     The hover result of the symbol occurring within the range.
     """
     hover: Hover
