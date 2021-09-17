@@ -218,6 +218,7 @@ func diffLocations(builder *strings.Builder, old, new []precise.LocationData, pr
 	}
 }
 
+// TODO update with kind
 func diffMonikers(
 	builder *strings.Builder,
 	old, new map[string]map[string][]precise.LocationData,
