@@ -1,3 +1,4 @@
+import classNames from 'classnames'
 import * as H from 'history'
 import BarChartIcon from 'mdi-react/BarChartIcon'
 import MagnifyIcon from 'mdi-react/MagnifyIcon'
@@ -14,15 +15,16 @@ import { Link } from '@sourcegraph/shared/src/components/Link'
 import { ExtensionsControllerProps } from '@sourcegraph/shared/src/extensions/controller'
 import { PlatformContextProps } from '@sourcegraph/shared/src/platform/context'
 import { omitFilter } from '@sourcegraph/shared/src/search/query/transformer'
-import { VersionContextProps } from '@sourcegraph/shared/src/search/util'
 import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
 import { TelemetryProps } from '@sourcegraph/shared/src/telemetry/telemetryService'
 import { ThemeProps } from '@sourcegraph/shared/src/theme'
 import { useObservable } from '@sourcegraph/shared/src/util/useObservable'
+import { Badge } from '@sourcegraph/web/src/components/Badge'
 import { WebCommandListPopoverButton } from '@sourcegraph/web/src/components/shared'
 import { FeedbackPrompt } from '@sourcegraph/web/src/nav/Feedback/FeedbackPrompt'
 import { StatusMessagesNavItem } from '@sourcegraph/web/src/nav/StatusMessagesNavItem'
 import { NavGroup, NavItem, NavBar, NavLink, NavActions, NavAction } from '@sourcegraph/wildcard'
+import { NavDropdown } from '@sourcegraph/wildcard/src/components/NavBar/NavDropdown'
 
 import { AuthenticatedUser } from '../auth'
 import { BatchChangesProps } from '../batches'
@@ -39,7 +41,6 @@ import {
 } from '../keyboardShortcuts/keyboardShortcuts'
 import { LayoutRouteProps } from '../routes'
 import { Settings } from '../schema/settings.schema'
-import { VersionContext } from '../schema/site.schema'
 import {
     PatternTypeProps,
     CaseSensitivityProps,
@@ -55,6 +56,7 @@ import { ThemePreferenceProps } from '../theme'
 import { userExternalServicesEnabledFromTags } from '../user/settings/cloud-ga'
 import { showDotComMarketing } from '../util/features'
 
+import styles from './GlobalNavbar.module.scss'
 import { ExtensionAlertAnimationProps, UserNavItem } from './UserNavItem'
 
 interface Props
@@ -70,7 +72,6 @@ interface Props
         Pick<ParsedSearchQueryProps, 'parsedSearchQuery'>,
         PatternTypeProps,
         CaseSensitivityProps,
-        VersionContextProps,
         SearchContextInputProps,
         CodeMonitoringProps,
         CodeInsightsProps,
@@ -96,9 +97,6 @@ interface Props
      * 'low-profile-with-logo' renders the low-profile navbar but with the homepage logo. Used on community search context pages.
      */
     variant: 'default' | 'low-profile' | 'low-profile-with-logo'
-
-    setVersionContext: (versionContext: string | undefined) => Promise<void>
-    availableVersionContexts: VersionContext[] | undefined
 
     minimalNavLinks?: boolean
     isSearchAutoFocusRequired?: boolean
@@ -212,14 +210,25 @@ export const GlobalNavbar: React.FunctionComponent<Props> = ({
                         branding={branding}
                         isLightTheme={isLightTheme}
                         variant="symbol"
-                        className="global-navbar__logo"
+                        className={styles.logo}
                     />
                 }
             >
                 <NavGroup>
-                    <NavItem icon={MagnifyIcon}>
-                        <NavLink to="/search">Code Search</NavLink>
-                    </NavItem>
+                    <NavDropdown
+                        toggleItem={{ path: '/search', icon: MagnifyIcon, content: 'Code Search' }}
+                        items={[
+                            { path: '/search', content: 'Search home' },
+                            {
+                                path: '/contexts',
+                                content: (
+                                    <>
+                                        Contexts <Badge className="ml-1" status="new" />
+                                    </>
+                                ),
+                            },
+                        ]}
+                    />
                     {props.enableCodeMonitoring && (
                         <NavItem icon={CodeMonitoringLogo}>
                             <NavLink to="/code-monitoring">Monitoring</NavLink>
@@ -247,14 +256,18 @@ export const GlobalNavbar: React.FunctionComponent<Props> = ({
                     {!props.authenticatedUser && (
                         <>
                             <NavAction>
-                                <Link className="global-navbar__link" to="https://about.sourcegraph.com">
+                                <Link className={styles.link} to="https://about.sourcegraph.com">
                                     About <span className="d-none d-sm-inline">Sourcegraph</span>
                                 </Link>
                             </NavAction>
 
                             {showDotComMarketing && (
                                 <NavAction>
-                                    <Link className="global-navbar__link font-weight-medium" to="/help" target="_blank">
+                                    <Link
+                                        className={classNames('font-weight-medium', styles.link)}
+                                        to="/help"
+                                        target="_blank"
+                                    >
                                         Docs
                                     </Link>
                                 </NavAction>
@@ -298,7 +311,7 @@ export const GlobalNavbar: React.FunctionComponent<Props> = ({
                                     <Link className="btn btn-sm btn-outline-secondary mr-1" to="/sign-in">
                                         Log in
                                     </Link>
-                                    <Link className="btn btn-sm global-navbar__sign-up" to="/sign-up">
+                                    <Link className={classNames('btn btn-sm', styles.signUp)} to="/sign-up">
                                         Sign up
                                     </Link>
                                 </div>

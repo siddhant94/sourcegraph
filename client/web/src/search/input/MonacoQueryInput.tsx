@@ -6,7 +6,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { KeyboardShortcut } from '@sourcegraph/shared/src/keyboardShortcuts'
 import { toMonacoRange } from '@sourcegraph/shared/src/search/query/monaco'
 import { appendContextFilter } from '@sourcegraph/shared/src/search/query/transformer'
-import { VersionContextProps } from '@sourcegraph/shared/src/search/util'
+import { fetchStreamSuggestions } from '@sourcegraph/shared/src/search/suggestions'
 import { SettingsCascadeProps } from '@sourcegraph/shared/src/settings/settings'
 import { ThemeProps } from '@sourcegraph/shared/src/theme'
 import { isErrorLike } from '@sourcegraph/shared/src/util/errors'
@@ -16,17 +16,17 @@ import { CaseSensitivityProps, PatternTypeProps, SearchContextProps } from '..'
 import { MonacoEditor } from '../../components/MonacoEditor'
 import { KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR } from '../../keyboardShortcuts/keyboardShortcuts'
 import { observeResize } from '../../util/dom'
-import { fetchSuggestions } from '../backend'
 import { QueryChangeSource, QueryState } from '../helpers'
 import { useQueryIntelligence, useQueryDiagnostics } from '../useQueryIntelligence'
+
+import styles from './MonacoQueryInput.module.scss'
 
 export interface MonacoQueryInputProps
     extends ThemeProps,
         Pick<CaseSensitivityProps, 'caseSensitive'>,
         Pick<PatternTypeProps, 'patternType'>,
         Pick<SearchContextProps, 'selectedSearchContextSpec'>,
-        SettingsCascadeProps,
-        VersionContextProps {
+        SettingsCascadeProps {
     isSourcegraphDotCom: boolean // significant for query suggestions
     queryState: QueryState
     onChange: (newState: QueryState) => void
@@ -108,7 +108,6 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
     onCompletionItemSelected,
     autoFocus,
     selectedSearchContextSpec,
-    versionContext,
     patternType,
     globbing,
     interpretComments,
@@ -138,8 +137,8 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
     }, [editor, container])
 
     const fetchSuggestionsWithContext = useCallback(
-        (query: string) => fetchSuggestions(appendContextFilter(query, selectedSearchContextSpec, versionContext)),
-        [selectedSearchContextSpec, versionContext]
+        (query: string) => fetchStreamSuggestions(appendContextFilter(query, selectedSearchContextSpec)),
+        [selectedSearchContextSpec]
     )
 
     const sourcegraphSearchLanguageId = useQueryIntelligence(fetchSuggestionsWithContext, {
@@ -161,12 +160,9 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
 
     // Register onCompletionSelected handler
     useEffect(() => {
-        if (!editor || !onCompletionItemSelected) {
-            return
-        }
-
-        Monaco.editor.registerCommand('completionItemSelected', onCompletionItemSelected)
-    }, [editor, onCompletionItemSelected])
+        const disposable = Monaco.editor.registerCommand('completionItemSelected', onCompletionItemSelected ?? noop)
+        return () => disposable.dispose()
+    }, [onCompletionItemSelected])
 
     // Disable default Monaco keybindings
     useEffect(() => {
@@ -390,7 +386,7 @@ export const MonacoQueryInput: React.FunctionComponent<MonacoQueryInputProps> = 
                 options={options}
                 border={false}
                 keyboardShortcutForFocus={KEYBOARD_SHORTCUT_FOCUS_SEARCHBAR}
-                className="test-query-input monaco-query-input"
+                className={classNames('test-query-input', styles.monacoQueryInput)}
             />
         </div>
     )

@@ -32,6 +32,8 @@ type CommitSearch struct {
 func (j CommitSearch) Run(ctx context.Context, stream streaming.Sender) error {
 	g, ctx := errgroup.WithContext(ctx)
 	for _, repoRev := range j.Repos {
+		repoRev := repoRev // we close over repoRev in onMatches
+
 		// Skip the repo if no revisions were resolved for it
 		if len(repoRev.Revs) == 0 {
 			continue
@@ -113,11 +115,15 @@ func NewSearchJob(q query.Q, repos []*search.RepositoryRevisions, diff bool, lim
 	}
 
 	return &CommitSearch{
-		Query: gitprotocol.NewAnd(queryNodesToPredicates(q, q.IsCaseSensitive(), diff)...),
+		Query: queryToGitQuery(q, diff),
 		Repos: repos,
 		Diff:  diff,
 		Limit: limit,
 	}, nil
+}
+
+func queryToGitQuery(q query.Q, diff bool) gitprotocol.Node {
+	return gitprotocol.Reduce(gitprotocol.NewAnd(queryNodesToPredicates(q, q.IsCaseSensitive(), diff)...))
 }
 
 func searchRevsToGitserverRevs(in []search.RevisionSpecifier) []gitprotocol.RevisionSpecifier {
@@ -210,7 +216,7 @@ func queryParameterToPredicate(parameter query.Parameter, caseSensitive, diff bo
 		newPred = &gitprotocol.DiffModifiesFile{Expr: search.LangToFileRegexp(parameter.Value), IgnoreCase: true}
 	}
 
-	if parameter.Negated {
+	if parameter.Negated && newPred != nil {
 		return gitprotocol.NewNot(newPred)
 	}
 	return newPred

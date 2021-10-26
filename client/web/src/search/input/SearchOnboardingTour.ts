@@ -59,6 +59,7 @@ const closeIconSvg =
 /**
  * Generates the content for the first step in the tour.
  *
+ * @param tour the Shepherd tour to attach the step to
  * @param languageButtonHandler the handler for the "search a language" button.
  * @param repositoryButtonHandler the handler for the "search a repository" button.
  */
@@ -71,8 +72,8 @@ function generateStep1(
     content.className = 'd-flex align-items-center'
     content.innerHTML = `
         <div class="tour-card__title">Get started</div>
-        <button class="btn btn-link p-0 tour-card__link tour-language-button">Search a language</button>
-        <button class="btn btn-link p-0 tour-card__link tour-repo-button">Search a repository</button>
+        <button type="button" class="btn btn-link p-0 tour-card__link tour-language-button">Search a language</button>
+        <button type="button" class="btn btn-link p-0 tour-card__link tour-repo-button">Search a repository</button>
     `
     content.querySelector('.tour-language-button')?.addEventListener('click', () => {
         languageButtonHandler()
@@ -170,8 +171,11 @@ const generateStepContent = (title: string, description: string): HTMLElement =>
     return element
 }
 
-const useTourWithSteps = ({ setQueryState }: Pick<UseSearchOnboardingTourOptions, 'setQueryState'>): Tour => {
-    const tour = useMemo(() => new Shepherd.Tour(tourOptions), [])
+const useTourWithSteps = ({
+    setQueryState,
+    stepsContainer,
+}: Pick<UseSearchOnboardingTourOptions, 'setQueryState' | 'stepsContainer'>): Tour => {
+    const tour = useMemo(() => new Shepherd.Tour({ ...tourOptions, stepsContainer }), [stepsContainer])
     useEffect(() => {
         tour.addSteps([
             {
@@ -273,13 +277,13 @@ const useTourWithSteps = ({ setQueryState }: Pick<UseSearchOnboardingTourOptions
                 },
                 classes: 'tour-card tour-card--arrow-right-down',
                 attachTo: {
-                    element: '.search-button__btn',
+                    element: '[data-testid="search-button"]',
                     on: 'top',
                 },
                 popperOptions: {
                     modifiers: [{ name: 'offset', options: { offset: [-140, 8] } }],
                 },
-                advanceOn: { selector: '.search-button__btn', event: 'click' },
+                advanceOn: { selector: '[data-testid="search-button"]', event: 'click' },
             },
         ])
     }, [tour, setQueryState])
@@ -304,6 +308,11 @@ interface UseSearchOnboardingTourOptions {
     queryState: QueryState
     history: H.History
     location: H.Location
+
+    /**
+     * HTML element where the steps should be attached to
+     */
+    stepsContainer?: HTMLElement
 }
 
 /**
@@ -330,8 +339,9 @@ export const useSearchOnboardingTour = ({
     showOnboardingTour,
     queryState,
     setQueryState,
+    stepsContainer,
 }: UseSearchOnboardingTourOptions): UseSearchOnboardingTourReturnValue => {
-    const tour = useTourWithSteps({ setQueryState })
+    const tour = useTourWithSteps({ setQueryState, stepsContainer })
     // True when the user has manually cancelled the tour
     const [hasCancelledTour, setHasCancelledTour] = useTemporarySetting('search.onboarding.tourCancelled', false)
     const [daysActiveCount] = useTemporarySetting('user.daysActiveCount', 0)

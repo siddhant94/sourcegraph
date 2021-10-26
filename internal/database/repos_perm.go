@@ -78,13 +78,7 @@ OR  (
 		)
 	)
 )
-OR EXISTS (                      -- We assume that all repos added by the authenticated user should be shown
-	SELECT
-	FROM external_service_repos
-	WHERE repo_id = repo.id
-	AND user_id = %s
-)
-OR (                             -- Restricted repositories require checking permissions
+OR  (                             -- Restricted repositories require checking permissions
 	(
 		SELECT object_ids_ints @> INTSET(repo.id)
 		FROM user_permissions
@@ -92,22 +86,13 @@ OR (                             -- Restricted repositories require checking per
 			user_id = %s
 		AND permission = %s
 		AND object_type = 'repos'
-	) AND EXISTS (               -- Check if the repository is also added by an organization the user is a member of
+	) AND EXISTS (               -- Check if the authenticated user added this repository or the repository was added at the instance level
 		SELECT
 		FROM external_service_repos
 		WHERE repo_id = repo.id
 		AND (
-				user_id IS NULL
-			OR  user_id = 0
-			OR  org_id IS NULL
-			OR  org_id = 0
-			OR EXISTS (
-				SELECT
-				FROM org_members
-				WHERE
-					external_service_repos.org_id = org_members.org_id
-				AND org_members.user_id = %s
-			)
+			(user_id IS NULL AND org_id IS NULL)
+			OR  user_id = %s
 		)
 	)
 )
@@ -117,7 +102,6 @@ OR (                             -- Restricted repositories require checking per
 	return sqlf.Sprintf(queryFmtString,
 		bypassAuthz,
 		usePermissionsUserMapping,
-		authenticatedUserID,
 		authenticatedUserID,
 		perms.String(),
 		authenticatedUserID,

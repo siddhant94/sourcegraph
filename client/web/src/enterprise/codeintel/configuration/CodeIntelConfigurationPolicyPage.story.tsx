@@ -5,15 +5,15 @@ import React from 'react'
 import { GitObjectType } from '@sourcegraph/shared/src/graphql-operations'
 import { getDocumentNode } from '@sourcegraph/shared/src/graphql/graphql'
 
+import { WebStory } from '../../../components/WebStory'
 import { CodeIntelligenceConfigurationPolicyFields } from '../../../graphql-operations'
-import { EnterpriseWebStory } from '../../components/EnterpriseWebStory'
 
 import {
     CodeIntelConfigurationPolicyPage,
     CodeIntelConfigurationPolicyPageProps,
 } from './CodeIntelConfigurationPolicyPage'
 import { POLICY_CONFIGURATION_BY_ID } from './usePoliciesConfigurations'
-import { SEARCH_GIT_TAGS, SEARCH_GIT_BRANCHES, SEARCH_REPO_NAME } from './useSearchGit'
+import { PREVIEW_GIT_OBJECT_FILTER } from './useSearchGit'
 
 const policy: CodeIntelligenceConfigurationPolicyFields = {
     __typename: 'CodeIntelligenceConfigurationPolicy' as const,
@@ -50,16 +50,17 @@ const policyRequest = {
 
 const branchRequest = {
     request: {
-        query: getDocumentNode(SEARCH_GIT_BRANCHES),
+        query: getDocumentNode(PREVIEW_GIT_OBJECT_FILTER),
     },
     result: {
         data: {
             node: {
                 ...repoResult,
-                branches: {
-                    totalCount: 3,
-                    nodes: [{ displayName: 'ef/wip1' }, { displayName: 'ef/wip2' }, { displayName: 'ef/wip3' }],
-                },
+                previewGitObjectFilter: [
+                    { name: 'ef/wip1', rev: 'deadbeef01' },
+                    { name: 'ef/wip2', rev: 'deadbeef02' },
+                    { name: 'ef/wip3', rev: 'deadbeef03' },
+                ],
             },
         },
     },
@@ -67,13 +68,16 @@ const branchRequest = {
 
 const tagRequest = {
     request: {
-        query: getDocumentNode(SEARCH_GIT_TAGS),
+        query: getDocumentNode(PREVIEW_GIT_OBJECT_FILTER),
     },
     result: {
         data: {
             node: {
                 ...repoResult,
-                tags: { totalCount: 2, nodes: [{ displayName: 'v3.0-ref' }, { displayName: 'v3-ref.1' }] },
+                previewGitObjectFilter: [
+                    { name: 'v3.0-ref', rev: 'deadbeef04' },
+                    { name: 'v3-ref.1', rev: 'deadbeef05' },
+                ],
             },
         },
     },
@@ -81,12 +85,13 @@ const tagRequest = {
 
 const commitRequest = {
     request: {
-        query: getDocumentNode(SEARCH_REPO_NAME),
+        query: getDocumentNode(PREVIEW_GIT_OBJECT_FILTER),
     },
     result: {
         data: {
             node: {
                 ...repoResult,
+                previewGitObjectFilter: [],
             },
         },
     },
@@ -105,11 +110,11 @@ const story: Meta = {
 export default story
 
 const Template: Story<CodeIntelConfigurationPolicyPageProps> = args => (
-    <EnterpriseWebStory mocks={[policyRequest, branchRequest, branchRequest, tagRequest, tagRequest, commitRequest]}>
+    <WebStory mocks={[policyRequest, branchRequest, branchRequest, tagRequest, tagRequest, commitRequest]}>
         {props => (
             <CodeIntelConfigurationPolicyPage {...props} indexingEnabled={boolean('indexingEnabled', true)} {...args} />
         )}
-    </EnterpriseWebStory>
+    </WebStory>
 )
 
 const defaults: Partial<CodeIntelConfigurationPolicyPageProps> = {}

@@ -588,7 +588,9 @@ type ExperimentalFeatures struct {
 	StructuralSearch string `json:"structuralSearch,omitempty"`
 	// TlsExternal description: Global TLS/SSL settings for Sourcegraph to use when communicating with code hosts.
 	TlsExternal *TlsExternal `json:"tls.external,omitempty"`
-	// VersionContexts description: JSON array of version context configuration
+	// VersionContexts description: DEPRECATED: Use search contexts instead.
+	//
+	// JSON array of version context configuration
 	VersionContexts []*VersionContext `json:"versionContexts,omitempty"`
 }
 
@@ -611,6 +613,24 @@ type ExternalIdentity struct {
 	// GitlabProvider description: The name that identifies the authentication provider to GitLab. This is passed to the `?provider=` query parameter in calls to the GitLab Users API. If you're not sure what this value is, you can look at the `identities` field of the GitLab Users API result (`curl  -H 'PRIVATE-TOKEN: $YOUR_TOKEN' $GITLAB_URL/api/v4/users`).
 	GitlabProvider string `json:"gitlabProvider"`
 	Type           string `json:"type"`
+}
+
+// FusionClient description: Configuration for the experimental p4-fusion client
+type FusionClient struct {
+	// Enabled description: Enable the p4-fusion client for cloning and fetching repos
+	Enabled bool `json:"enabled,omitempty"`
+	// LookAhead description: How many CLs in the future, at most, shall we keep downloaded by the time it is to commit them
+	LookAhead int `json:"lookAhead"`
+	// MaxChanges description: How many changes to fetch during initial clone. The default of -1 will fetch all known changes
+	MaxChanges int `json:"maxChanges,omitempty"`
+	// NetworkThreads description: The number of threads in the threadpool for running network calls. Defaults to the number of logical CPUs.
+	NetworkThreads int `json:"networkThreads,omitempty"`
+	// PrintBatch description: The p4 print batch size
+	PrintBatch int `json:"printBatch,omitempty"`
+	// Refresh description: How many times a connection should be reused before it is refreshed
+	Refresh int `json:"refresh,omitempty"`
+	// Retries description: How many times a command should be retried before the process exits in a failure
+	Retries int `json:"retries,omitempty"`
 }
 
 // GitCommitAuthor description: The author of the Git commit.
@@ -734,6 +754,8 @@ type GitHubWebhook struct {
 
 // GitLabAuthProvider description: Configures the GitLab OAuth authentication provider for SSO. In addition to specifying this configuration object, you must also create a OAuth App on your GitLab instance: https://docs.gitlab.com/ee/integration/oauth_provider.html. The application should have `api` and `read_user` scopes and the callback URL set to the concatenation of your Sourcegraph instance URL and "/.auth/gitlab/callback".
 type GitLabAuthProvider struct {
+	// ApiScope description: The OAuth API scope that should be used
+	ApiScope string `json:"apiScope,omitempty"`
 	// ClientID description: The Client ID of the GitLab OAuth app, accessible from https://gitlab.com/oauth/applications (or the same path on your private GitLab instance).
 	ClientID string `json:"clientID"`
 	// ClientSecret description: The Client Secret of the GitLab OAuth app, accessible from https://gitlab.com/oauth/applications (or the same path on your private GitLab instance).
@@ -1175,6 +1197,8 @@ type PerforceConnection struct {
 	Authorization *PerforceAuthorization `json:"authorization,omitempty"`
 	// Depots description: Depots can have arbitrary paths, e.g. a path to depot root or a subdirectory.
 	Depots []string `json:"depots,omitempty"`
+	// FusionClient description: Configuration for the experimental p4-fusion client
+	FusionClient *FusionClient `json:"fusionClient,omitempty"`
 	// MaxChanges description: Only import at most n changes when possible (git p4 clone --max-changes).
 	MaxChanges float64 `json:"maxChanges,omitempty"`
 	// P4Client description: Client specified as an option for p4 CLI (P4CLIENT, also enables '--use-client-spec')
@@ -1193,6 +1217,8 @@ type PerforceConnection struct {
 	//
 	// It is important that the Sourcegraph repository name generated with this pattern be unique to this Perforce Server. If different Perforce Servers generate repository names that collide, Sourcegraph's behavior is undefined.
 	RepositoryPathPattern string `json:"repositoryPathPattern,omitempty"`
+	// UseFusionClient description: EXPERIMENTAL: Use the p4-fusion client to clone and fetch repos
+	UseFusionClient bool `json:"useFusionClient,omitempty"`
 }
 
 // PerforceRateLimit description: Rate limit applied when making background API requests to Perforce.
@@ -1404,7 +1430,9 @@ type Settings struct {
 	SearchIncludeForks *bool `json:"search.includeForks,omitempty"`
 	// SearchMigrateParser description: REMOVED. Previously, a flag to enable and/or-expressions in queries as an aid transition to new language features in versions <= 3.24.0.
 	SearchMigrateParser *bool `json:"search.migrateParser,omitempty"`
-	// SearchRepositoryGroups description: Named groups of repositories that can be referenced in a search query using the `repogroup:` operator. The list can contain string literals (to include single repositories) and JSON objects with a "regex" field (to include all repositories matching the regular expression). Retrieving repogroups via the GQL interface will currently exclude repositories matched by regex patterns. #14208.
+	// SearchRepositoryGroups description: DEPRECATED: Use search contexts instead.
+	//
+	// Named groups of repositories that can be referenced in a search query using the `repogroup:` operator. The list can contain string literals (to include single repositories) and JSON objects with a "regex" field (to include all repositories matching the regular expression). Retrieving repogroups via the GQL interface will currently exclude repositories matched by regex patterns. #14208.
 	SearchRepositoryGroups map[string][]interface{} `json:"search.repositoryGroups,omitempty"`
 	// SearchSavedQueries description: DEPRECATED: Saved search queries
 	SearchSavedQueries []*SearchSavedQueries `json:"search.savedQueries,omitempty"`
@@ -1426,6 +1454,8 @@ type SettingsExperimentalFeatures struct {
 	CodeInsights *bool `json:"codeInsights,omitempty"`
 	// CodeInsightsAllRepos description: DEPRECATED: Enables the experimental ability to run an insight over all repositories on the instance.
 	CodeInsightsAllRepos *bool `json:"codeInsightsAllRepos,omitempty"`
+	// CodeInsightsGqlApi description: Enables gql api instead of using setting cascade as a main storage fro code insights entities
+	CodeInsightsGqlApi *bool `json:"codeInsightsGqlApi,omitempty"`
 	// CodeMonitoring description: Enables code monitoring.
 	CodeMonitoring *bool `json:"codeMonitoring,omitempty"`
 	// CopyQueryButton description: DEPRECATED: This feature is now permanently enabled. Enables displaying the copy query button in the search bar when hovering over the global navigation bar.
@@ -1450,7 +1480,7 @@ type SettingsExperimentalFeatures struct {
 	ShowMultilineSearchConsole *bool `json:"showMultilineSearchConsole,omitempty"`
 	// ShowOnboardingTour description: Enables the onboarding tour.
 	ShowOnboardingTour *bool `json:"showOnboardingTour,omitempty"`
-	// ShowQueryBuilder description: Enables the search query builder page at search/query-builder
+	// ShowQueryBuilder description: REMOVED. Previously, enabled the search query builder page. This page has been removed.
 	ShowQueryBuilder *bool `json:"showQueryBuilder,omitempty"`
 	// ShowRepogroupHomepage description: Enables the repository group homepage
 	ShowRepogroupHomepage *bool `json:"showRepogroupHomepage,omitempty"`
@@ -1508,10 +1538,12 @@ type SiteConfiguration struct {
 	//
 	// Only available in Sourcegraph Enterprise.
 	Branding *Branding `json:"branding,omitempty"`
-	// CampaignsEnabled description: DEPRECATED: Use batchChanges.enabled instead. Enables/disables the campaigns feature.
+	// CampaignsEnabled description: DEPRECATED: Use batchChanges.enabled instead. This setting is non-functional.
 	CampaignsEnabled *bool `json:"campaigns.enabled,omitempty"`
-	// CampaignsRestrictToAdmins description: DEPRECATED: Use batchChanges.restrictToAdmins instead. When enabled, only site admins can create and apply campaigns.
+	// CampaignsRestrictToAdmins description: DEPRECATED: Use batchChanges.restrictToAdmins instead. This setting is non-functional.
 	CampaignsRestrictToAdmins *bool `json:"campaigns.restrictToAdmins,omitempty"`
+	// CloneProgressLog description: Whether clone progress should be logged to a file. If enabled, logs are written to files in the OS default path for temporary files.
+	CloneProgressLog bool `json:"cloneProgress.log,omitempty"`
 	// CodeIntelAutoIndexingEnabled description: Enables/disables the code intel auto indexing feature. This feature is currently supported only on certain managed Sourcegraph instances.
 	CodeIntelAutoIndexingEnabled *bool `json:"codeIntelAutoIndexing.enabled,omitempty"`
 	// CorsOrigin description: Required when using any of the native code host integrations for Phabricator, GitLab, or Bitbucket Server. It is a space-separated list of allowed origins for cross-origin HTTP requests which should be the base URL for your Phabricator, GitLab, or Bitbucket Server instance.

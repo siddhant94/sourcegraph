@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sourcegraph/sourcegraph/enterprise/dev/ci/images"
@@ -38,7 +39,14 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 		// Add debug flags for scripts to consume
 		"CI_DEBUG_PROFILE": strconv.FormatBool(c.MessageFlags.ProfilingEnabled),
 		// Bump Node.js memory to prevent OOM crashes
-		"NODE_OPTIONS": "--max_old_space_size=4096",
+		"NODE_OPTIONS": "--max_old_space_size=8192",
+
+		// Bundlesize configuration: https://github.com/siddharthkp/bundlesize2#build-status-and-checks-for-github
+		"CI_REPO_OWNER": "sourcegraph",
+		"CI_REPO_NAME":  "sourcegraph",
+		"CI_COMMIT_SHA": os.Getenv("BUILDKITE_COMMIT"),
+		// $ in commit messages must be escaped to not attempt interpolation which will fail.
+		"CI_COMMIT_MESSAGE": strings.ReplaceAll(os.Getenv("BUILDKITE_MESSAGE"), "$", "$$"),
 	}
 
 	// On release branches Percy must compare to the previous commit of the release branch, not main.
@@ -101,7 +109,7 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 
 	case BackendIntegrationTests:
 		ops.Append(
-			buildCandidateDockerImage("server", c.candidateImageTag()),
+			buildCandidateDockerImage("server", c.Version, c.candidateImageTag()),
 			backendIntegrationTests(c.candidateImageTag()))
 
 		// Run default set of PR checks as well
@@ -137,8 +145,11 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 			panic(fmt.Sprintf("no image %q found", patchImage))
 		}
 		ops = operations.NewSet([]operations.Operation{
-			buildCandidateDockerImage(patchImage, c.candidateImageTag()),
+			buildCandidateDockerImage(patchImage, c.Version, c.candidateImageTag()),
 		})
+
+		// Trivy security scans
+		ops.Append(trivyScanCandidateImage(patchImage, c.candidateImageTag()))
 		// Test images
 		ops.Merge(CoreTestOperations(nil, CoreTestOperationsOptions{}))
 		// Publish images
@@ -148,7 +159,7 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 		// If this is a no-test branch, then run only the Docker build. No tests are run.
 		app := c.Branch[27:]
 		ops = operations.NewSet([]operations.Operation{
-			buildCandidateDockerImage(app, c.candidateImageTag()),
+			buildCandidateDockerImage(app, c.Version, c.candidateImageTag()),
 			wait,
 			publishFinalDockerImage(c, app, false),
 		})
@@ -156,7 +167,7 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 	case CandidatesNoTest:
 		for _, dockerImage := range images.SourcegraphDockerImages {
 			ops.Append(
-				buildCandidateDockerImage(dockerImage, c.candidateImageTag()))
+				buildCandidateDockerImage(dockerImage, c.Version, c.candidateImageTag()))
 		}
 
 	case ExecutorPatchNoTest:
@@ -171,13 +182,19 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 
 		// Slow image builds
 		for _, dockerImage := range images.SourcegraphDockerImages {
-			ops.Append(buildCandidateDockerImage(dockerImage, c.candidateImageTag()))
+			ops.Append(buildCandidateDockerImage(dockerImage, c.Version, c.candidateImageTag()))
 		}
-		// Currently disabled due to timeouts - see https://github.com/sourcegraph/sourcegraph/issues/25487
-		// skipHashCompare := c.MessageFlags.SkipHashCompare || c.RunType.Is(ReleaseBranch)
-		// if c.RunType.Is(MainDryRun, MainBranch) {
-		// 	ops.Append(buildExecutor(c.Version, skipHashCompare))
-		// }
+
+		// Trivy security scans
+		for _, dockerImage := range images.SourcegraphDockerImages {
+			ops.Append(trivyScanCandidateImage(dockerImage, c.candidateImageTag()))
+		}
+
+		// Executor VM image
+		skipHashCompare := c.MessageFlags.SkipHashCompare || c.RunType.Is(ReleaseBranch)
+		if c.RunType.Is(MainDryRun, MainBranch) {
+			ops.Append(buildExecutor(c.Version, skipHashCompare))
+		}
 
 		// Slow tests
 		if c.RunType.Is(MainDryRun, MainBranch) {
@@ -200,10 +217,10 @@ func GeneratePipeline(c Config) (*bk.Pipeline, error) {
 		for _, dockerImage := range images.SourcegraphDockerImages {
 			ops.Append(publishFinalDockerImage(c, dockerImage, c.RunType.Is(MainBranch)))
 		}
-		// Currently disabled due to timeouts - see https://github.com/sourcegraph/sourcegraph/issues/25487
-		// if c.RunType.Is(MainBranch) {
-		// 	ops.Append(publishExecutor(c.Version, skipHashCompare))
-		// }
+		// Executor VM image
+		if c.RunType.Is(MainBranch) {
+			ops.Append(publishExecutor(c.Version, skipHashCompare))
+		}
 
 		// Propagate changes elsewhere
 		if c.RunType.Is(MainBranch) {

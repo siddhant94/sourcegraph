@@ -16,6 +16,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/actor"
 	"github.com/sourcegraph/sourcegraph/internal/api"
 	"github.com/sourcegraph/sourcegraph/internal/gitserver"
+	"github.com/sourcegraph/sourcegraph/internal/gitserver/gitdomain"
 	"github.com/sourcegraph/sourcegraph/internal/honey"
 	"github.com/sourcegraph/sourcegraph/internal/lazyregexp"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
@@ -184,7 +185,7 @@ var runCommitLog = func(ctx context.Context, cmd *gitserver.Cmd, opt CommitsOpti
 	if err != nil {
 		data = bytes.TrimSpace(data)
 		if isBadObjectErr(string(stderr), opt.Range) {
-			return nil, &gitserver.RevisionNotFoundError{Repo: cmd.Repo, Spec: opt.Range}
+			return nil, &gitdomain.RevisionNotFoundError{Repo: cmd.Repo, Spec: opt.Range}
 		}
 		return nil, errors.WithMessage(err, fmt.Sprintf("git command %v failed (output: %q)", cmd.Args, data))
 	}
@@ -265,10 +266,11 @@ func CommitCount(ctx context.Context, repo api.RepoName, opt CommitsOptions) (ui
 		// This doesn't include --follow flag because rev-list doesn't support it, so the number may be slightly off.
 		cmd.Args = append(cmd.Args, "--", opt.Path)
 	}
-	out, err := cmd.CombinedOutput(ctx)
+	out, err := cmd.Output(ctx)
 	if err != nil {
 		return 0, errors.WithMessage(err, fmt.Sprintf("git command %v failed (output: %q)", cmd.Args, out))
 	}
+
 	out = bytes.TrimSpace(out)
 	n, err := strconv.ParseUint(string(out), 10, 64)
 	return uint(n), err
@@ -282,7 +284,7 @@ func FirstEverCommit(ctx context.Context, repo api.RepoName) (*gitapi.Commit, er
 	args := []string{"rev-list", "--max-count=1", "--max-parents=0", "HEAD"}
 	cmd := gitserver.DefaultClient.Command("git", args...)
 	cmd.Repo = repo
-	out, err := cmd.CombinedOutput(ctx)
+	out, err := cmd.Output(ctx)
 	if err != nil {
 		return nil, errors.WithMessage(err, fmt.Sprintf("git command %v failed (output: %q)", args, out))
 	}

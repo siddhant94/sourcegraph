@@ -19,10 +19,10 @@ import (
 	store "github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/dbstore"
 	"github.com/sourcegraph/sourcegraph/enterprise/internal/codeintel/stores/uploadstore"
 	"github.com/sourcegraph/sourcegraph/internal/api"
+	"github.com/sourcegraph/sourcegraph/internal/gitserver/gitdomain"
 	"github.com/sourcegraph/sourcegraph/internal/honey"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/types"
-	"github.com/sourcegraph/sourcegraph/internal/vcs"
 	"github.com/sourcegraph/sourcegraph/internal/workerutil"
 	dbworkerstore "github.com/sourcegraph/sourcegraph/internal/workerutil/dbworker/store"
 	"github.com/sourcegraph/sourcegraph/lib/codeintel/lsif/conversion"
@@ -44,6 +44,9 @@ var (
 	_ workerutil.WithPreDequeue = &handler{}
 	_ workerutil.WithHooks      = &handler{}
 )
+
+// errCommitDoesNotExist occurs when gitserver does not recognize the commit attached to the upload.
+var errCommitDoesNotExist = errors.Errorf("commit does not exist")
 
 func (h *handler) Handle(ctx context.Context, record workerutil.Record) error {
 	_, err := h.handle(ctx, record.(store.Upload))
@@ -140,9 +143,12 @@ func (h *handler) handle(ctx context.Context, upload store.Upload) (requeued boo
 			// Find the date of the commit and store that in the upload record. We do this now as we
 			// will need to find the _oldest_ commit with code intelligence data to efficiently update
 			// the commit graph for the repository.
-			commitDate, err := h.gitserverClient.CommitDate(ctx, upload.RepositoryID, upload.Commit)
+			_, commitDate, revisionExists, err := h.gitserverClient.CommitDate(ctx, upload.RepositoryID, upload.Commit)
 			if err != nil {
 				return errors.Wrap(err, "gitserverClient.CommitDate")
+			}
+			if !revisionExists {
+				return errCommitDoesNotExist
 			}
 			if err := tx.UpdateCommitedAt(ctx, upload.ID, commitDate); err != nil {
 				return errors.Wrap(err, "store.CommitDate")
@@ -214,19 +220,17 @@ const CloneInProgressDelay = time.Minute
 // If the repo is currently cloning, then we'll requeue the upload to be tried again later. This will not
 // increase the reset count of the record (so this doesn't count against the upload as a legitimate attempt).
 func requeueIfCloning(ctx context.Context, workerStore dbworkerstore.Store, upload store.Upload, repo *types.Repo) (requeued bool, _ error) {
-	if _, err := backend.Repos.ResolveRev(ctx, repo, upload.Commit); err != nil {
-		if !vcs.IsCloneInProgress(err) {
-			return false, errors.Wrap(err, "Repos.ResolveRev")
-		}
-
-		if err := workerStore.Requeue(ctx, upload.ID, time.Now().UTC().Add(CloneInProgressDelay)); err != nil {
-			return false, errors.Wrap(err, "store.Requeue")
-		}
-
-		return true, nil
+	_, err := backend.Repos.ResolveRev(ctx, repo, upload.Commit)
+	if err == nil || !gitdomain.IsCloneInProgress(err) {
+		return false, errors.Wrap(err, "Repos.ResolveRev")
 	}
 
-	return false, nil
+	if err := workerStore.Requeue(ctx, upload.ID, time.Now().UTC().Add(CloneInProgressDelay)); err != nil {
+		return false, errors.Wrap(err, "store.Requeue")
+	}
+
+	log15.Warn("Requeued LSIF upload record (repository still cloning)", "id", upload.ID)
+	return true, nil
 }
 
 // withUploadData will invoke the given function with a reader of the upload's raw data. The
@@ -261,6 +265,13 @@ func withUploadData(ctx context.Context, uploadStore uploadstore.Store, id int, 
 
 // writeData transactionally writes the given grouped bundle data into the given LSIF store.
 func writeData(ctx context.Context, lsifStore LSIFStore, upload dbstore.Upload, repo *types.Repo, isDefaultBranch bool, groupedBundleData *precise.GroupedBundleDataChans) (err error) {
+	// Upsert values used for documentation search that have high contention. We do this with the raw LSIF store
+	// instead of in the transaction below because the rows being upserted tend to have heavy contention.
+	repositoryNameID, languageNameID, err := lsifStore.WriteDocumentationSearchPrework(ctx, upload, repo, isDefaultBranch)
+	if err != nil {
+		return errors.Wrap(err, "store.WriteDocumentationSearchPrework")
+	}
+
 	tx, err := lsifStore.Transact(ctx)
 	if err != nil {
 		return err
@@ -282,7 +293,7 @@ func writeData(ctx context.Context, lsifStore LSIFStore, upload dbstore.Upload, 
 	if err := tx.WriteReferences(ctx, upload.ID, groupedBundleData.References); err != nil {
 		return errors.Wrap(err, "store.WriteReferences")
 	}
-	if err := tx.WriteDocumentationPages(ctx, upload, repo, isDefaultBranch, groupedBundleData.DocumentationPages); err != nil {
+	if err := tx.WriteDocumentationPages(ctx, upload, repo, isDefaultBranch, groupedBundleData.DocumentationPages, repositoryNameID, languageNameID); err != nil {
 		return errors.Wrap(err, "store.WriteDocumentationPages")
 	}
 	if err := tx.WriteDocumentationPathInfo(ctx, upload.ID, groupedBundleData.DocumentationPathInfo); err != nil {

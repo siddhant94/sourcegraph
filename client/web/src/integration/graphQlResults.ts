@@ -220,9 +220,17 @@ export const commonWebGraphQlResults: Partial<WebGraphQlOperations & SharedGraph
     FetchFeatureFlags: () => ({
         viewerFeatureFlags: [],
     }),
+    OrgFeatureFlagValue: () => ({
+        organizationFeatureFlagValue: false,
+    }),
     GetTemporarySettings: () => ({
         temporarySettings: {
-            contents: '{}',
+            __typename: 'TemporarySettings',
+            contents: JSON.stringify({
+                'user.daysActiveCount': 1,
+                'user.lastDayActive': new Date().toDateString(),
+                'search.usedNonGlobalContext': true,
+            }),
         },
     }),
     EditTemporarySettings: () => ({

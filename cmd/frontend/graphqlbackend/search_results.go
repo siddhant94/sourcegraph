@@ -43,6 +43,7 @@ import (
 	"github.com/sourcegraph/sourcegraph/internal/search/searchcontexts"
 	"github.com/sourcegraph/sourcegraph/internal/search/streaming"
 	"github.com/sourcegraph/sourcegraph/internal/search/unindexed"
+	"github.com/sourcegraph/sourcegraph/internal/search/zoekt"
 	"github.com/sourcegraph/sourcegraph/internal/trace"
 	"github.com/sourcegraph/sourcegraph/internal/trace/ot"
 	"github.com/sourcegraph/sourcegraph/internal/types"
@@ -463,7 +464,6 @@ func (r *searchResolver) toRepoOptions(q query.Q, opts resolveRepositoriesOpts) 
 	repoFilters, minusRepoFilters := q.Repositories()
 	if opts.effectiveRepoFieldValues != nil {
 		repoFilters = opts.effectiveRepoFieldValues
-
 	}
 	repoGroupFilters, _ := q.StringValues(query.FieldRepoGroup)
 
@@ -503,11 +503,6 @@ func (r *searchResolver) toRepoOptions(q query.Q, opts resolveRepositoriesOpts) 
 	commitAfter, _ := q.StringValue(query.FieldRepoHasCommitAfter)
 	searchContextSpec, _ := q.StringValue(query.FieldContext)
 
-	var versionContextName string
-	if r.VersionContext != nil {
-		versionContextName = *r.VersionContext
-	}
-
 	var CacheLookup bool
 	if len(opts.effectiveRepoFieldValues) == 0 && opts.limit == 0 {
 		// indicates resolving repositories should cache DB lookups
@@ -515,31 +510,27 @@ func (r *searchResolver) toRepoOptions(q query.Q, opts resolveRepositoriesOpts) 
 	}
 
 	return search.RepoOptions{
-		RepoFilters:        repoFilters,
-		MinusRepoFilters:   minusRepoFilters,
-		RepoGroupFilters:   repoGroupFilters,
-		VersionContextName: versionContextName,
-		SearchContextSpec:  searchContextSpec,
-		UserSettings:       r.UserSettings,
-		OnlyForks:          fork == query.Only,
-		NoForks:            fork == query.No,
-		OnlyArchived:       archived == query.Only,
-		NoArchived:         archived == query.No,
-		Visibility:         visibility,
-		CommitAfter:        commitAfter,
-		Query:              q,
-		Ranked:             true,
-		Limit:              opts.limit,
-		CacheLookup:        CacheLookup,
+		RepoFilters:       repoFilters,
+		MinusRepoFilters:  minusRepoFilters,
+		RepoGroupFilters:  repoGroupFilters,
+		SearchContextSpec: searchContextSpec,
+		UserSettings:      r.UserSettings,
+		OnlyForks:         fork == query.Only,
+		NoForks:           fork == query.No,
+		OnlyArchived:      archived == query.Only,
+		NoArchived:        archived == query.No,
+		Visibility:        visibility,
+		CommitAfter:       commitAfter,
+		Query:             q,
+		Ranked:            true,
+		Limit:             opts.limit,
+		CacheLookup:       CacheLookup,
 	}
 }
 
-func withMode(args search.TextParameters, st query.SearchType, versionContext *string) search.TextParameters {
+func withMode(args search.TextParameters, st query.SearchType) search.TextParameters {
 	isGlobalSearch := func() bool {
 		if st == query.SearchTypeStructural {
-			return false
-		}
-		if versionContext != nil && *versionContext != "" {
 			return false
 		}
 
@@ -628,7 +619,7 @@ func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []ru
 		SearcherURLs: r.searcherURLs,
 	}
 	args = withResultTypes(args, forceResultTypes)
-	args = withMode(args, r.PatternType, r.VersionContext)
+	args = withMode(args, r.PatternType)
 
 	var jobs []run.Job
 	{
@@ -1496,18 +1487,31 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 	if args.Mode == search.ZoektGlobalSearch {
 		argsIndexed := *args
 
-		// Get all private repos that are accessible by the current actor.
-		if res, err := database.Repos(r.db).ListRepoNames(ctx, database.ReposListOptions{
+		userID := int32(0)
+		if envvar.SourcegraphDotComMode() {
+			if a := actor.FromContext(ctx); a != nil {
+				userID = a.UID
+			}
+		}
+
+		// Get all private repos for the the current actor. On sourcegraph.com, those are
+		// only the repos directly added by the user. Otherwise it's all repos the user has
+		// access to on all connected code hosts / external services.
+		userPrivateRepos, err := database.Repos(r.db).ListRepoNames(ctx, database.ReposListOptions{
+			UserID:       userID, // Zero valued when not in sourcegraph.com mode
 			OnlyPrivate:  true,
 			LimitOffset:  &database.LimitOffset{Limit: search.SearchLimits(conf.Get()).MaxRepos + 1},
 			OnlyForks:    args.RepoOptions.OnlyForks,
 			NoForks:      args.RepoOptions.NoForks,
 			OnlyArchived: args.RepoOptions.OnlyArchived,
 			NoArchived:   args.RepoOptions.NoArchived,
-		}); err != nil {
-			tr.LazyPrintf("error resolving private repos: %v", err)
+		})
+
+		if err != nil {
+			log15.Error("doResults: failed to list user private repos", "error", err, "user-id", userID)
+			tr.LazyPrintf("error resolving user private repos: %v", err)
 		} else {
-			argsIndexed.UserPrivateRepos = res
+			argsIndexed.UserPrivateRepos = userPrivateRepos
 		}
 
 		wg := waitGroup(true)
@@ -1515,7 +1519,22 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 			wg.Add(1)
 			goroutine.Go(func() {
 				defer wg.Done()
-				_ = agg.DoFilePathSearch(ctx, &argsIndexed)
+				ctx, stream, cleanup := streaming.WithLimit(ctx, agg, int(argsIndexed.PatternInfo.FileMatchLimit))
+				defer cleanup()
+
+				zoektArgs, err := zoekt.NewIndexedSearchRequest(ctx, &argsIndexed, search.TextRequest, zoekt.MissingRepoRevStatus(stream))
+				if err != nil {
+					agg.Error(err)
+					return
+				}
+
+				searcherArgs := &search.SearcherParameters{
+					SearcherURLs:    argsIndexed.SearcherURLs,
+					PatternInfo:     argsIndexed.PatternInfo,
+					UseFullDeadline: argsIndexed.UseFullDeadline,
+				}
+				// This code path implies not-only-searcher is run (3rd arg is true)
+				_ = agg.DoFilePathSearch(ctx, zoektArgs, searcherArgs, true, stream)
 			})
 		}
 
@@ -1599,7 +1618,25 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 			wg.Add(1)
 			goroutine.Go(func() {
 				defer wg.Done()
-				_ = agg.DoFilePathSearch(ctx, args)
+
+				ctx, stream, cleanup := streaming.WithLimit(ctx, agg, int(args.PatternInfo.FileMatchLimit))
+				defer cleanup()
+
+				zoektArgs, err := zoekt.NewIndexedSearchRequest(ctx, args, search.TextRequest, zoekt.MissingRepoRevStatus(stream))
+				if err != nil {
+					agg.Error(err)
+					return
+				}
+
+				searcherArgs := &search.SearcherParameters{
+					SearcherURLs:    args.SearcherURLs,
+					PatternInfo:     args.PatternInfo,
+					UseFullDeadline: args.UseFullDeadline,
+				}
+
+				notSearcherOnly := args.Mode != search.SearcherOnly
+
+				_ = agg.DoFilePathSearch(ctx, zoektArgs, searcherArgs, notSearcherOnly, stream)
 			})
 		}
 	}
