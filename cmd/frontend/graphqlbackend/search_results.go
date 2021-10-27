@@ -587,7 +587,7 @@ func withMode(args search.TextParameters, st query.SearchType) search.TextParame
 // where each job contains its separate state for that kind of search and
 // backend. To complete the migration to jobs in phases, `args` is kept
 // backwards compatibility and represents a generic search.
-func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []run.Job, error) {
+func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []run.PartialJob, error) {
 	b, err := query.ToBasicQuery(q)
 	if err != nil {
 		return nil, nil, err
@@ -621,7 +621,7 @@ func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []ru
 	args = withResultTypes(args, forceResultTypes)
 	args = withMode(args, r.PatternType)
 
-	var jobs []run.Job
+	var jobs []run.PartialJob
 	{
 		// This code block creates search jobs under specific
 		// conditions, and depending on generic process of `args` above.
@@ -629,15 +629,18 @@ func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []ru
 		// of the above logic should be used to create search jobs
 		// across all of Sourcegraph.
 		if r.PatternType == query.SearchTypeStructural && p.Pattern != "" {
-			jobs = append(jobs, &unindexed.StructuralSearch{
-				RepoFetcher: unindexed.NewRepoFetcher(r.stream, &args),
-				Mode:        args.Mode,
-				SearcherArgs: search.SearcherParameters{
-					SearcherURLs:    args.SearcherURLs,
-					PatternInfo:     args.PatternInfo,
-					UseFullDeadline: args.UseFullDeadline,
-				},
-			})
+			jobs = append(jobs,
+				func([]*search.RepositoryRevisions) run.Job {
+					return &unindexed.StructuralSearch{
+						RepoFetcher: unindexed.NewRepoFetcher(r.stream, &args),
+						Mode:        args.Mode,
+						SearcherArgs: search.SearcherParameters{
+							SearcherURLs:    args.SearcherURLs,
+							PatternInfo:     args.PatternInfo,
+							UseFullDeadline: args.UseFullDeadline,
+						},
+					}
+				})
 		}
 	}
 	return &args, jobs, nil
@@ -645,7 +648,7 @@ func (r *searchResolver) toSearchInputs(q query.Q) (*search.TextParameters, []ru
 
 // evaluateLeaf performs a single search operation and corresponds to the
 // evaluation of leaf expression in a query.
-func (r *searchResolver) evaluateLeaf(ctx context.Context, args *search.TextParameters, jobs []run.Job) (_ *SearchResults, err error) {
+func (r *searchResolver) evaluateLeaf(ctx context.Context, args *search.TextParameters, jobs []run.PartialJob) (_ *SearchResults, err error) {
 	tr, ctx := trace.New(ctx, "evaluateLeaf", "")
 	defer func() {
 		tr.SetError(err)
@@ -1151,7 +1154,7 @@ func searchResultsToFileNodes(matches []result.Match) ([]query.Node, error) {
 // resultsWithTimeoutSuggestion calls doResults, and in case of deadline
 // exceeded returns a search alert with a did-you-mean link for the same
 // query with a longer timeout.
-func (r *searchResolver) resultsWithTimeoutSuggestion(ctx context.Context, args *search.TextParameters, jobs []run.Job) (*SearchResults, error) {
+func (r *searchResolver) resultsWithTimeoutSuggestion(ctx context.Context, args *search.TextParameters, jobs []run.PartialJob) (*SearchResults, error) {
 	start := time.Now()
 	rr, err := r.doResults(ctx, args, jobs)
 
@@ -1422,7 +1425,7 @@ func withResultTypes(args search.TextParameters, forceTypes result.Types) search
 // regardless of what `type:` is specified in the query string.
 //
 // Partial results AND an error may be returned.
-func (r *searchResolver) doResults(ctx context.Context, args *search.TextParameters, jobs []run.Job) (res *SearchResults, err error) {
+func (r *searchResolver) doResults(ctx context.Context, args *search.TextParameters, jobs []run.PartialJob) (res *SearchResults, err error) {
 	tr, ctx := trace.New(ctx, "doResults", r.rawQuery())
 	defer func() {
 		tr.SetError(err)
@@ -1669,7 +1672,7 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 				return
 			}
 
-			jobs = append(jobs, j)
+			jobs = append(jobs, func([]*search.RepositoryRevisions) run.Job { return j })
 		}
 
 		if args.ResultTypes.Has(result.TypeCommit) {
@@ -1714,7 +1717,8 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 	}
 
 	// Start all specific search jobs, if any.
-	for _, job := range jobs {
+	for _, partial := range jobs {
+		job := partial(args.Repos)
 		wg := wgForJob(job)
 		wg.Add(1)
 		goroutine.Go(func() {

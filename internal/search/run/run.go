@@ -21,6 +21,8 @@ type SearchInputs struct {
 	DefaultLimit int
 }
 
+type PartialJob func([]*search.RepositoryRevisions) Job
+
 // Job is an interface shared by all search backends. Calling Run on a job
 // object runs a search. The relation with SearchInputs and Jobs is that
 // SearchInputs are static values, parsed and validated, to produce Jobs. Jobs
