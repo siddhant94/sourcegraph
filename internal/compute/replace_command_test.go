@@ -1,6 +1,7 @@
 package compute
 
 import (
+	"context"
 	"regexp"
 	"testing"
 
@@ -9,7 +10,7 @@ import (
 
 func Test_replace(t *testing.T) {
 	test := func(input string, cmd *Replace) string {
-		result, err := replace([]byte(input), cmd.MatchPattern, cmd.ReplacePattern)
+		result, err := replace(context.Background(), []byte(input), cmd.MatchPattern, cmd.ReplacePattern)
 		if err != nil {
 			return err.Error()
 		}
