@@ -564,7 +564,7 @@ func trivyScanCandidateImage(app, tag string) operations.Operation {
 			bk.Cmd("./dev/ci/trivy/trivy-scan-high-critical.sh"),
 		}
 
-		pipeline.AddStep(fmt.Sprintf(":trivy: :docker: 🔎 %q", app), cmds...)
+		pipeline.AddStep(fmt.Sprintf(":trivy: :docker: :mag: %q", app), cmds...)
 	}
 }
 
