@@ -1,3 +1,45 @@
+TODO
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Write something like this I guess:
+
 # Configure precise code intelligence data retention policies
 
 This guide shows how to configure the retention policies for precise code intelligence data. As code intelligence data ages, it gets less and less relevant. Users tend to need code intelligence on newer commits, tagged commits, and in branches. The data providing intelligence for an old commit on the main development branch is very unlikely to be used, but takes up valuable space in the database.

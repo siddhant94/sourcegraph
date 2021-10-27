@@ -8,3 +8,4 @@
   - [Find references](./features.md#find-references)
   - [Symbol search](./features.md#symbol-search)
 - [Writing an indexer](writing_an_indexer.md)
+- <span class="badge badge-experimental">Experimental</span> [Auto indexing](auto_indexing.md)
