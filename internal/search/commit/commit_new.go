@@ -24,14 +24,16 @@ import (
 
 type CommitSearch struct {
 	Query gitprotocol.Node
-	Repos []*search.RepositoryRevisions
 	Diff  bool
 	Limit int
 }
 
-func (j CommitSearch) Run(ctx context.Context, stream streaming.Sender) error {
+func (j CommitSearch) Run(ctx context.Context, stream streaming.Sender, repos []*search.RepositoryRevisions) error {
+	if err := CheckSearchLimits(q, len(repos), resultType); err != nil {
+		return nil, err
+	}
 	g, ctx := errgroup.WithContext(ctx)
-	for _, repoRev := range j.Repos {
+	for _, repoRev := range repos {
 		repoRev := repoRev // we close over repoRev in onMatches
 
 		// Skip the repo if no revisions were resolved for it
@@ -110,13 +112,9 @@ func NewSearchJob(q query.Q, repos []*search.RepositoryRevisions, diff bool, lim
 	if diff {
 		resultType = "diff"
 	}
-	if err := CheckSearchLimits(q, len(repos), resultType); err != nil {
-		return nil, err
-	}
 
 	return &CommitSearch{
 		Query: queryToGitQuery(q, diff),
-		Repos: repos,
 		Diff:  diff,
 		Limit: limit,
 	}, nil
