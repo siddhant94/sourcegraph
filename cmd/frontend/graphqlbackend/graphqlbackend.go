@@ -493,6 +493,9 @@ func newSchemaResolver(db dbutil.DB) *schemaResolver {
 		"OutOfBandMigration": func(ctx context.Context, id graphql.ID) (Node, error) {
 			return r.OutOfBandMigrationByID(ctx, id)
 		},
+		"WebhookLog": func(ctx context.Context, id graphql.ID) (Node, error) {
+			return webhookLogByID(ctx, db, id)
+		},
 	}
 	return r
 }

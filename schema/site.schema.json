@@ -1086,6 +1086,9 @@
         },
         "userExternalAccountKey": {
           "$ref": "#/definitions/EncryptionKey"
+        },
+        "webhookLogKey": {
+          "$ref": "#/definitions/EncryptionKey"
         }
       }
     },
@@ -1132,6 +1135,22 @@
               }
             }
           }
+        }
+      }
+    },
+    "webhook.logging": {
+      "description": "Configuration for logging incoming webhooks.",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Whether incoming webhooks are logged. If omitted, logging is enabled unless encryption is enabled. If encryption is enabled and this setting is enabled, then logged webhooks will be encrypted, which may cause significant load if a cloud encryption provider is in use.",
+          "type": "boolean",
+          "!go": { "pointer": true }
+        },
+        "retention": {
+          "description": "How long incoming webhooks are retained. The string format is that of the Duration type in the Go time package (https://golang.org/pkg/time/#ParseDuration). By default, this is \"3d\", or three days.",
+          "type": "string",
+          "default": "3d"
         }
       }
     }

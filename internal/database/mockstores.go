@@ -33,4 +33,6 @@ type MockStores struct {
 	TemporarySettings MockTemporarySettings
 
 	FeatureFlags MockFeatureFlags
+
+	WebhookLogs MockWebhookLogs
 }
