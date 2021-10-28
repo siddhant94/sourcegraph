@@ -10,6 +10,9 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/sourcegraph/sourcegraph/internal/authz"
+	"github.com/sourcegraph/sourcegraph/internal/extsvc"
 )
 
 func TestConvertToPostgresMatch(t *testing.T) {
@@ -121,9 +124,50 @@ func TestConvertToGlobMatch(t *testing.T) {
 	}
 }
 
+func TestScanFullRepoPermissions(t *testing.T) {
+	f, err := os.Open("testdata/sample-protects-u.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rc := io.NopCloser(bytes.NewReader(data))
+
+	execer := p4ExecFunc(func(ctx context.Context, host, user, password string, args ...string) (io.ReadCloser, http.Header, error) {
+		return rc, nil, nil
+	})
+
+	p := NewTestProvider("", "ssl:111.222.333.444:1666", "admin", "password", execer)
+	p.depots = []extsvc.RepoID{
+		"//app/main/",
+		"//app/training",
+		"//app/test/",
+		"//not-app/main/", // no rules exist
+	}
+	perms := &authz.ExternalUserPermissions{
+		SubRepoPermissions: make(map[extsvc.RepoID]*authz.SubRepoPermissions),
+	}
+	if err := scanProtects(rc, fullRepoPermsScanner(perms, p.depots)); err != nil {
+		t.Fatal(err)
+	}
+
+	want := &authz.ExternalUserPermissions{
+		SubRepoPermissions: map[extsvc.RepoID]*authz.SubRepoPermissions{},
+	}
+	if diff := cmp.Diff(want, perms); diff != "" {
+		t.Fatal(diff)
+	}
+}
+
 func TestScanAllUsers(t *testing.T) {
 	ctx := context.Background()
-	f, err := os.Open("testdata/sample-protects.txt")
+	f, err := os.Open("testdata/sample-protects-a.txt")
 	if err != nil {
 		t.Fatal(err)
 	}

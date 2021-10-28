@@ -237,12 +237,20 @@ func repoIncludesExcludesScanner(perms *authz.ExternalUserPermissions) func(p4Pr
 // authorization, including sub-repo perms.
 func fullRepoPermsScanner(perms *authz.ExternalUserPermissions, configuredDepots []extsvc.RepoID) func(p4ProtectLine) error {
 	relevantDepots := func(m globMatch) (depots []extsvc.RepoID) {
+		// TODO This is bust
 		for _, depot := range configuredDepots {
 			if m.Match(string(depot)) {
 				depots = append(depots, depot)
 			}
 		}
 		return
+	}
+
+	getSubRepoPerms := func(repo extsvc.RepoID) *authz.SubRepoPermissions {
+		if _, ok := perms.SubRepoPermissions[repo]; !ok {
+			perms.SubRepoPermissions[repo] = &authz.SubRepoPermissions{}
+		}
+		return perms.SubRepoPermissions[repo]
 	}
 
 	seenRepos := make(map[extsvc.RepoID]struct{})
@@ -261,22 +269,57 @@ func fullRepoPermsScanner(perms *authz.ExternalUserPermissions, configuredDepots
 			return err
 		}
 
+		// Depots that this match pertains to
+		depots := relevantDepots(match)
+
+		// Handle inclusions
 		if !line.isExclusion {
-			// Access is granted to *some* part of the depot, so user has access to the
-			// root repo.
-			depots := relevantDepots(match)
 			appendRepos(depots...)
 
 			// Grant access to specified paths
 			for _, depot := range depots {
-				perms := perms.SubRepoPermissions[depot]
-				perms.PathIncludes = append(perms.PathIncludes, match.raw)
+				subRepoPerms := getSubRepoPerms(depot)
+				subRepoPerms.PathIncludes = append(subRepoPerms.PathIncludes, match.raw)
+
+				// TODO ACL conflicts
+				// for i, exclude := range subRepoPerms.PathExcludes {
+				// 	// Perforce ACLs can have conflict rules and the later one wins. So if there is
+				// 	// an exact match for an exclusion prefix, we take out the exclude.
+				// 	if match.raw == exclude {
+				// 		subRepoPerms.PathExcludes = append(subRepoPerms.PathExcludes[:i], subRepoPerms.PathExcludes[i+1:]...)
+				// 	}
+				// 	break
+				// }
 			}
 
 			return nil
 		}
 
-		// TODO exclusio ncases
+		if strings.Contains(line.match, perforceWildcardMatchAll) ||
+			strings.Contains(line.match, perforceWildcardMatchDirectory) {
+			// Always include wildcard matches, because we don't know what they might
+			// be matching on.
+			for _, depot := range depots {
+				subRepoPerms := getSubRepoPerms(depot)
+				subRepoPerms.PathExcludes = append(subRepoPerms.PathExcludes, match.raw)
+			}
+			return nil
+		}
+
+		for _, depot := range depots {
+			subRepoPerms := perms.SubRepoPermissions[depot]
+			subRepoPerms.PathExcludes = append(subRepoPerms.PathExcludes, match.raw)
+
+			// TODO ACL conflicts
+			// for i, include := range subRepoPerms.PathIncludes {
+			// 	// Perforce ACLs can have conflict rules and the later one wins. So if there is
+			// 	// an exact match for an include prefix, we take out the include.
+			// 	if match.raw == include {
+			// 		subRepoPerms.PathIncludes = append(subRepoPerms.PathIncludes[:i], subRepoPerms.PathIncludes[i+1:]...)
+			// 	}
+			// 	break
+			// }
+		}
 
 		return nil
 	}
