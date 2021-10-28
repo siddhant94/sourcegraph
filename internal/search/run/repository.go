@@ -85,39 +85,46 @@ func SearchRepositories(ctx context.Context, args *search.TextParameters, limit 
 	}
 
 	// Filter args.Repos by matching their names against the query pattern.
-	tr.LogFields(otlog.Int("resolved.len", len(args.Repos)))
-
-	results := make(chan []*search.RepositoryRevisions)
-	go func() {
-		defer close(results)
-		matchRepos(pattern, args.Repos, results)
-	}()
-
-	// Filter the repos if there is a repohasfile: or -repohasfile field.
-	if len(args.PatternInfo.FilePatternsReposMustExclude) > 0 || len(args.PatternInfo.FilePatternsReposMustInclude) > 0 {
-		// Fallback to batch for reposToAdd
-		var repos []*search.RepositoryRevisions
-		for matched := range results {
-			repos = append(repos, matched...)
-		}
-		repos, err = reposToAdd(ctx, args, repos)
+	for {
+		repos, err := args.Repos(ctx, limit)
 		if err != nil {
 			return err
 		}
-		stream.Send(streaming.SearchEvent{
-			Results: repoRevsToRepoMatches(ctx, repos),
-		})
-		return nil
+
+		results := make(chan []*search.RepositoryRevisions)
+		go func() {
+			defer close(results)
+			matchRepos(pattern, args.Repos, results)
+		}()
+
+		// Filter the repos if there is a repohasfile: or -repohasfile field.
+		if len(args.PatternInfo.FilePatternsReposMustExclude) > 0 || len(args.PatternInfo.FilePatternsReposMustInclude) > 0 {
+			// Fallback to batch for reposToAdd
+			var repos []*search.RepositoryRevisions
+			for matched := range results {
+				repos = append(repos, matched...)
+			}
+			repos, err = reposToAdd(ctx, args, repos)
+			if err != nil {
+				return err
+			}
+			stream.Send(streaming.SearchEvent{
+				Results: repoRevsToRepoMatches(ctx, repos),
+			})
+			return nil
+		}
+
+		count := 0
+		for repos := range results {
+			count += len(repos)
+			stream.Send(streaming.SearchEvent{
+				Results: repoRevsToRepoMatches(ctx, repos),
+			})
+		}
+		tr.LogFields(otlog.Int("matched.len", count))
 	}
 
-	count := 0
-	for repos := range results {
-		count += len(repos)
-		stream.Send(streaming.SearchEvent{
-			Results: repoRevsToRepoMatches(ctx, repos),
-		})
-	}
-	tr.LogFields(otlog.Int("matched.len", count))
+	tr.LogFields(otlog.Int("resolved.len", len(repos)))
 
 	return nil
 }

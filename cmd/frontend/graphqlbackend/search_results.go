@@ -1567,177 +1567,184 @@ func (r *searchResolver) doResults(ctx context.Context, args *search.TextParamet
 		}
 	}
 
-	resolved, err := r.resolveRepositories(ctx, args.RepoOptions)
-	if err != nil {
-		if alert, err := errorToAlert(err); alert != nil {
-			return alert.wrapResults(), err
+	for {
+		if args.RepoOptions.Limit == 0 {
+			args.RepoOptions.Limit = 500
 		}
-		// Don't surface context errors to the user.
-		if errors.Is(err, context.Canceled) {
-			tr.LazyPrintf("context canceled during repo resolution: %v", err)
-			optionalWg.Wait()
-			requiredWg.Wait()
-			return r.toSearchResults(ctx, agg)
+
+		resolved, err := r.resolveRepositories(ctx, args.RepoOptions)
+		if err != nil {
+			if alert, err := errorToAlert(err); alert != nil {
+				return alert.wrapResults(), err
+			}
+			// Don't surface context errors to the user.
+			if errors.Is(err, context.Canceled) {
+				tr.LazyPrintf("context canceled during repo resolution: %v", err)
+				optionalWg.Wait()
+				requiredWg.Wait()
+				return r.toSearchResults(ctx, agg)
+			}
+			return nil, err
 		}
-		return nil, err
-	}
-	args.Repos = resolved.RepoRevs
+		args.Repos = resolved.RepoRevs
 
-	tr.LazyPrintf("searching %d repos, %d missing", len(args.Repos), len(resolved.MissingRepoRevs))
-	if len(args.Repos) == 0 {
-		return r.alertForNoResolvedRepos(ctx, args.Query).wrapResults(), nil
-	}
+		tr.LazyPrintf("searching %d repos, %d missing", len(args.Repos), len(resolved.MissingRepoRevs))
+		if len(args.Repos) == 0 {
+			return r.alertForNoResolvedRepos(ctx, args.Query).wrapResults(), nil
+		}
 
-	if len(resolved.MissingRepoRevs) > 0 {
-		agg.Error(&missingRepoRevsError{Missing: resolved.MissingRepoRevs})
-		tr.LazyPrintf("adding error for missing repo revs - done")
-	}
+		if len(resolved.MissingRepoRevs) > 0 {
+			agg.Error(&missingRepoRevsError{Missing: resolved.MissingRepoRevs})
+			tr.LazyPrintf("adding error for missing repo revs - done")
+		}
 
-	agg.Send(streaming.SearchEvent{
-		Stats: streaming.Stats{
-			Repos:            resolved.RepoSet,
-			ExcludedForks:    resolved.ExcludedRepos.Forks,
-			ExcludedArchived: resolved.ExcludedRepos.Archived,
-		},
-	})
-	tr.LazyPrintf("sending first stats (repos %d, excluded repos %+v) - done", len(resolved.RepoSet), resolved.ExcludedRepos)
-
-	if args.ResultTypes.Has(result.TypeRepo) {
-		wg := waitGroup(true)
-		wg.Add(1)
-		goroutine.Go(func() {
-			defer wg.Done()
-			_ = agg.DoRepoSearch(ctx, args, int32(limit))
+		agg.Send(streaming.SearchEvent{
+			Stats: streaming.Stats{
+				Repos:            resolved.RepoSet,
+				ExcludedForks:    resolved.ExcludedRepos.Forks,
+				ExcludedArchived: resolved.ExcludedRepos.Archived,
+			},
 		})
+		tr.LazyPrintf("sending first stats (repos %d, excluded repos %+v) - done", len(resolved.RepoSet), resolved.ExcludedRepos)
 
-	}
-
-	if args.ResultTypes.Has(result.TypeSymbol) && args.PatternInfo.Pattern != "" {
-		if !skipUnindexed {
-			wg := waitGroup(args.ResultTypes.Without(result.TypeSymbol) == 0)
-			wg.Add(1)
-			goroutine.Go(func() {
-				defer wg.Done()
-
-				notSearcherOnly := !searcherOnly
-
-				_ = agg.DoSymbolSearch(ctx, args, notSearcherOnly, false, limit)
-			})
-		}
-	}
-
-	if args.ResultTypes.Has(result.TypeFile | result.TypePath) {
-		if !skipUnindexed {
+		if args.ResultTypes.Has(result.TypeRepo) {
 			wg := waitGroup(true)
 			wg.Add(1)
 			goroutine.Go(func() {
 				defer wg.Done()
+				_ = agg.DoRepoSearch(ctx, args, int32(limit))
+			})
 
-				ctx, stream, cleanup := streaming.WithLimit(ctx, agg, int(args.PatternInfo.FileMatchLimit))
-				defer cleanup()
+		}
 
-				// This code path implies we've already decided to run global-search (3rd arg is always false).
-				zoektArgs, err := zoekt.NewIndexedSearchRequest(ctx, args, false, search.TextRequest, zoekt.MissingRepoRevStatus(stream))
+		if args.ResultTypes.Has(result.TypeSymbol) && args.PatternInfo.Pattern != "" {
+			if !skipUnindexed {
+				wg := waitGroup(args.ResultTypes.Without(result.TypeSymbol) == 0)
+				wg.Add(1)
+				goroutine.Go(func() {
+					defer wg.Done()
+
+					notSearcherOnly := !searcherOnly
+
+					_ = agg.DoSymbolSearch(ctx, args, notSearcherOnly, false, limit)
+				})
+			}
+		}
+
+		if args.ResultTypes.Has(result.TypeFile | result.TypePath) {
+			if !skipUnindexed {
+				wg := waitGroup(true)
+				wg.Add(1)
+				goroutine.Go(func() {
+					defer wg.Done()
+
+					ctx, stream, cleanup := streaming.WithLimit(ctx, agg, int(args.PatternInfo.FileMatchLimit))
+					defer cleanup()
+
+					// This code path implies we've already decided to run global-search (3rd arg is always false).
+					zoektArgs, err := zoekt.NewIndexedSearchRequest(ctx, args, false, search.TextRequest, zoekt.MissingRepoRevStatus(stream))
+					if err != nil {
+						agg.Error(err)
+						return
+					}
+
+					searcherArgs := &search.SearcherParameters{
+						SearcherURLs:    args.SearcherURLs,
+						PatternInfo:     args.PatternInfo,
+						UseFullDeadline: args.UseFullDeadline,
+					}
+
+					notSearcherOnly := !searcherOnly
+
+					_ = agg.DoFilePathSearch(ctx, zoektArgs, searcherArgs, notSearcherOnly, stream)
+				})
+			}
+		}
+
+		if featureflag.FromContext(ctx).GetBoolOr("cc_commit_search", true) {
+			addCommitSearch := func(diff bool) {
+				j, err := commit.NewSearchJob(args.Query, diff, int(args.PatternInfo.FileMatchLimit))
 				if err != nil {
 					agg.Error(err)
 					return
 				}
 
-				searcherArgs := &search.SearcherParameters{
-					SearcherURLs:    args.SearcherURLs,
-					PatternInfo:     args.PatternInfo,
-					UseFullDeadline: args.UseFullDeadline,
+				if err := j.ExpandUsernames(ctx, r.db); err != nil {
+					agg.Error(err)
+					return
 				}
 
-				notSearcherOnly := !searcherOnly
-
-				_ = agg.DoFilePathSearch(ctx, zoektArgs, searcherArgs, notSearcherOnly, stream)
-			})
-		}
-	}
-
-	if featureflag.FromContext(ctx).GetBoolOr("cc_commit_search", true) {
-		addCommitSearch := func(diff bool) {
-			j, err := commit.NewSearchJob(args.Query, diff, int(args.PatternInfo.FileMatchLimit))
-			if err != nil {
-				agg.Error(err)
-				return
+				jobs = append(jobs, j)
 			}
 
-			if err := j.ExpandUsernames(ctx, r.db); err != nil {
-				agg.Error(err)
-				return
+			if args.ResultTypes.Has(result.TypeCommit) {
+				addCommitSearch(false)
 			}
 
-			jobs = append(jobs, j)
+			if args.ResultTypes.Has(result.TypeDiff) {
+				addCommitSearch(true)
+			}
+		} else {
+			if args.ResultTypes.Has(result.TypeDiff) {
+				wg := waitGroup(args.ResultTypes.Without(result.TypeDiff) == 0)
+				wg.Add(1)
+				goroutine.Go(func() {
+					defer wg.Done()
+					_ = agg.DoDiffSearch(ctx, args)
+				})
+			}
+
+			if args.ResultTypes.Has(result.TypeCommit) {
+				wg := waitGroup(args.ResultTypes.Without(result.TypeCommit) == 0)
+				wg.Add(1)
+				goroutine.Go(func() {
+					defer wg.Done()
+					_ = agg.DoCommitSearch(ctx, args)
+				})
+
+			}
 		}
 
-		if args.ResultTypes.Has(result.TypeCommit) {
-			addCommitSearch(false)
+		wgForJob := func(job run.Job) *sync.WaitGroup {
+			switch job.Name() {
+			case "Diff":
+				return waitGroup(args.ResultTypes.Without(result.TypeDiff) == 0)
+			case "Commit":
+				return waitGroup(args.ResultTypes.Without(result.TypeCommit) == 0)
+			case "Structural":
+				return waitGroup(true)
+			default:
+				panic("unknown job name " + job.Name())
+			}
 		}
 
-		if args.ResultTypes.Has(result.TypeDiff) {
-			addCommitSearch(true)
-		}
-	} else {
-		if args.ResultTypes.Has(result.TypeDiff) {
-			wg := waitGroup(args.ResultTypes.Without(result.TypeDiff) == 0)
+		// Start all specific search jobs, if any.
+		for _, job := range jobs {
+			wg := wgForJob(job)
 			wg.Add(1)
 			goroutine.Go(func() {
 				defer wg.Done()
-				_ = agg.DoDiffSearch(ctx, args)
+				_ = agg.DoSearch(ctx, job, args.Repos, args.Mode)
 			})
 		}
 
-		if args.ResultTypes.Has(result.TypeCommit) {
-			wg := waitGroup(args.ResultTypes.Without(result.TypeCommit) == 0)
-			wg.Add(1)
-			goroutine.Go(func() {
-				defer wg.Done()
-				_ = agg.DoCommitSearch(ctx, args)
-			})
+		hasStartedAllBackends = true
 
-		}
+		// Wait for required searches.
+		requiredWg.Wait()
+
+		// Give optional searches some minimum budget in case required searches return quickly.
+		// Cancel all remaining searches after this minimum budget.
+		budget := 100 * time.Millisecond
+		elapsed := time.Since(start)
+		timer := time.AfterFunc(budget-elapsed, cancel)
+
+		// Wait for remaining optional searches to finish or get cancelled.
+		optionalWg.Wait()
+
+		timer.Stop()
+
 	}
-
-	wgForJob := func(job run.Job) *sync.WaitGroup {
-		switch job.Name() {
-		case "Diff":
-			return waitGroup(args.ResultTypes.Without(result.TypeDiff) == 0)
-		case "Commit":
-			return waitGroup(args.ResultTypes.Without(result.TypeCommit) == 0)
-		case "Structural":
-			return waitGroup(true)
-		default:
-			panic("unknown job name " + job.Name())
-		}
-	}
-
-	// Start all specific search jobs, if any.
-	for _, job := range jobs {
-		wg := wgForJob(job)
-		wg.Add(1)
-		goroutine.Go(func() {
-			defer wg.Done()
-			_ = agg.DoSearch(ctx, job, args.Repos, args.Mode)
-		})
-	}
-
-	hasStartedAllBackends = true
-
-	// Wait for required searches.
-	requiredWg.Wait()
-
-	// Give optional searches some minimum budget in case required searches return quickly.
-	// Cancel all remaining searches after this minimum budget.
-	budget := 100 * time.Millisecond
-	elapsed := time.Since(start)
-	timer := time.AfterFunc(budget-elapsed, cancel)
-
-	// Wait for remaining optional searches to finish or get cancelled.
-	optionalWg.Wait()
-
-	timer.Stop()
 
 	return r.toSearchResults(ctx, agg)
 }
